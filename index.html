@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTML-based Infinite Canvas</title>
+<style>
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#canvas-container {
+    position: absolute;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    cursor: grab;
+    background-color: #f5f5f5;
+    background-image: 
+        linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+    background-size: 50px 50px;
+}
+
+#infinite-canvas {
+    position: absolute;
+    width: 10000px;
+    height: 10000px;
+    transform-origin: 0 0;
+    left: 0;
+    top: 0;
+}
+
+.rectangle {
+    position: absolute;
+    background-color: rgba(100, 149, 237, 0.5);
+    border: 2px solid cornflowerblue;
+    box-sizing: border-box;
+}
+
+.tools {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+    display: flex;
+    gap: 10px;
+}
+
+button {
+    padding: 10px 15px;
+    cursor: pointer;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+button.active {
+    background-color: cornflowerblue;
+    color: white;
+}
+
+#minimap-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 200px;
+    height: 150px;
+    border: 2px solid #333;
+    background-color: rgba(255, 255, 255, 0.8);
+    overflow: hidden;
+    z-index: 1000;
+    cursor: move;
+}
+
+#minimap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    cursor: move;
+}
+
+#viewport-indicator {
+    position: absolute;
+    border: 2px solid red;
+    background-color: rgba(255, 0, 0, 0.1);
+    pointer-events: none;
+}
+
+.mini-rectangle {
+    position: absolute;
+    background-color: rgba(100, 149, 237, 0.5);
+    border: 1px solid cornflowerblue;
+    pointer-events: none;
+}
+
+.creating-rectangle {
+    position: absolute;
+    background-color: rgba(100, 149, 237, 0.2);
+    border: 2px dashed cornflowerblue;
+}
+</style>
+</head>
+<body>
+<div class="tools">
+<button id="create-btn">Create Rectangle</button>
+</div>
+
+<div id="canvas-container">
+<div id="infinite-canvas"></div>
+</div>
+
+<div id="minimap-container">
+<div id="minimap">
+    <div id="viewport-indicator"></div>
+</div>
+</div>
+
+<script>
+// Elements
+const canvasContainer = document.getElementById('canvas-container');
+const infiniteCanvas = document.getElementById('infinite-canvas');
+const minimapContainer = document.getElementById('minimap-container');
+const minimap = document.getElementById('minimap');
+const viewportIndicator = document.getElementById('viewport-indicator');
+const createBtn = document.getElementById('create-btn');
+
+// State variables
+let mode = 'pan'; // 'pan' or 'create'
+let isPanning = false;
+let isDrawing = false;
+let isMovingMinimap = false;
+let startX = 0;
+let startY = 0;
+let currentTranslateX = 0;
+let currentTranslateY = 0;
+let currentScale = 1;
+let rectangleStartX = 0;
+let rectangleStartY = 0;
+let currentRectangle = null;
+let minimapStartX = 0;
+let minimapStartY = 0;
+
+// Scale factors
+const canvasWidth = 10000;
+const canvasHeight = 10000;
+
+// Set up canvas initial position to center
+currentTranslateX = (window.innerWidth - canvasWidth) / 2;
+currentTranslateY = (window.innerHeight - canvasHeight) / 2;
+updateCanvasTransform();
+
+// Mode switching
+createBtn.addEventListener('click', () => {
+    if (mode === 'pan') {
+        mode = 'create';
+        createBtn.classList.add('active');
+        canvasContainer.style.cursor = 'crosshair';
+    } else {
+        mode = 'pan';
+        createBtn.classList.remove('active');
+        canvasContainer.style.cursor = 'grab';
+    }
+});
+
+// Canvas event listeners for panning
+canvasContainer.addEventListener('mousedown', handleMouseDown);
+canvasContainer.addEventListener('mousemove', handleMouseMove);
+canvasContainer.addEventListener('mouseup', handleMouseUp);
+canvasContainer.addEventListener('wheel', handleWheel);
+canvasContainer.addEventListener('dblclick', handleDoubleClick);
+
+// Minimap event listeners
+minimapContainer.addEventListener('mousedown', handleMinimapMouseDown);
+document.addEventListener('mousemove', handleMinimapMouseMove);
+document.addEventListener('mouseup', handleMinimapMouseUp);
+minimap.addEventListener('click', handleMinimapClick);
+
+// Event handlers
+function handleMouseDown(e) {
+    if (e.target !== canvasContainer && e.target !== infiniteCanvas && mode === 'pan') return;
+    
+    if (mode === 'pan') {
+        isPanning = true;
+        canvasContainer.style.cursor = 'grabbing';
+    } else if (mode === 'create') {
+        isDrawing = true;
+        
+        // Calculate the position on the infinite canvas
+        const rect = canvasContainer.getBoundingClientRect();
+        const x = (e.clientX - rect.left - currentTranslateX) / currentScale;
+        const y = (e.clientY - rect.top - currentTranslateY) / currentScale;
+        
+        rectangleStartX = x;
+        rectangleStartY = y;
+        
+        // Create a new rectangle element
+        currentRectangle = document.createElement('div');
+        currentRectangle.className = 'creating-rectangle';
+        currentRectangle.style.left = `${x}px`;
+        currentRectangle.style.top = `${y}px`;
+        currentRectangle.style.width = '0';
+        currentRectangle.style.height = '0';
+        infiniteCanvas.appendChild(currentRectangle);
+    }
+    
+    startX = e.clientX;
+    startY = e.clientY;
+}
+
+function handleMouseMove(e) {
+    if (isPanning) {
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        currentTranslateX += dx;
+        currentTranslateY += dy;
+        
+        updateCanvasTransform();
+        updateMinimapViewport();
+        
+        startX = e.clientX;
+        startY = e.clientY;
+    } else if (isDrawing && currentRectangle) {
+        const rect = canvasContainer.getBoundingClientRect();
+        const x = (e.clientX - rect.left - currentTranslateX) / currentScale;
+        const y = (e.clientY - rect.top - currentTranslateY) / currentScale;
+        
+        const width = x - rectangleStartX;
+        const height = y - rectangleStartY;
+        
+        // Update rectangle position and size
+        if (width < 0) {
+            currentRectangle.style.left = `${x}px`;
+            currentRectangle.style.width = `${Math.abs(width)}px`;
+        } else {
+            currentRectangle.style.width = `${width}px`;
+        }
+        
+        if (height < 0) {
+            currentRectangle.style.top = `${y}px`;
+            currentRectangle.style.height = `${Math.abs(height)}px`;
+        } else {
+            currentRectangle.style.height = `${height}px`;
+        }
+    }
+}
+
+function handleMouseUp() {
+    if (isPanning) {
+        isPanning = false;
+        canvasContainer.style.cursor = 'grab';
+    } else if (isDrawing && currentRectangle) {
+        isDrawing = false;
+        
+        // Convert the creating rectangle to a normal rectangle
+        currentRectangle.className = 'rectangle';
+        
+        // Add a minimap representation
+        createMinimapRectangle(currentRectangle);
+        
+        currentRectangle = null;
+    }
+}
+
+function handleWheel(e) {
+    e.preventDefault();
+    
+    const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const mouseX = e.clientX - canvasContainer.getBoundingClientRect().left;
+    const mouseY = e.clientY - canvasContainer.getBoundingClientRect().top;
+    
+    // Calculate the mouse position relative to the canvas in its current scale
+    const mouseXInCanvas = (mouseX - currentTranslateX) / currentScale;
+    const mouseYInCanvas = (mouseY - currentTranslateY) / currentScale;
+    
+    // Update the scale
+    currentScale *= scaleFactor;
+    
+    // Limit the scale
+    currentScale = Math.min(Math.max(0.1, currentScale), 5);
+    
+    // Adjust the translation to zoom towards the mouse cursor
+    currentTranslateX = mouseX - mouseXInCanvas * currentScale;
+    currentTranslateY = mouseY - mouseYInCanvas * currentScale;
+    
+    updateCanvasTransform();
+    updateMinimapViewport();
+}
+
+function handleMinimapMouseDown(e) {
+    e.stopPropagation();
+    
+    // Allow dragging from anywhere in the minimap container
+    isMovingMinimap = true;
+    minimapStartX = e.clientX;
+    minimapStartY = e.clientY;
+}
+
+function handleMinimapMouseMove(e) {
+    if (isMovingMinimap) {
+        const dx = e.clientX - minimapStartX;
+        const dy = e.clientY - minimapStartY;
+        
+        // Move the minimap container
+        const left = parseInt(getComputedStyle(minimapContainer).left) + dx;
+        const top = parseInt(getComputedStyle(minimapContainer).top) + dy;
+        
+        minimapContainer.style.left = `${left}px`;
+        minimapContainer.style.top = `${top}px`;
+        
+        minimapStartX = e.clientX;
+        minimapStartY = e.clientY;
+    }
+}
+
+function handleMinimapMouseUp() {
+    isMovingMinimap = false;
+}
+
+function handleMinimapClick(e) {
+    if (isMovingMinimap) return; // Don't navigate if we're just finishing a drag
+    
+    // Calculate the position clicked within the minimap (as a percentage)
+    const rect = minimap.getBoundingClientRect();
+    const percentX = (e.clientX - rect.left) / rect.width;
+    const percentY = (e.clientY - rect.top) / rect.height;
+    
+    // Convert to canvas coordinates
+    const targetX = percentX * canvasWidth;
+    const targetY = percentY * canvasHeight;
+    
+    // Center the viewport on this point
+    currentTranslateX = (window.innerWidth / 2) - (targetX * currentScale);
+    currentTranslateY = (window.innerHeight / 2) - (targetY * currentScale);
+    
+    updateCanvasTransform();
+    updateMinimapViewport();
+}
+
+function handleDoubleClick(e) {
+    e.preventDefault();
+    
+    // Only zoom if in pan mode
+    if (mode !== 'pan') return;
+    
+    // Calculate the mouse position relative to the canvas
+    const rect = canvasContainer.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate the mouse position relative to the canvas in its current scale
+    const mouseXInCanvas = (mouseX - currentTranslateX) / currentScale;
+    const mouseYInCanvas = (mouseY - currentTranslateY) / currentScale;
+    
+    // Zoom in by a factor of 2
+    const scaleFactor = 2;
+    currentScale *= scaleFactor;
+    
+    // Limit the scale
+    currentScale = Math.min(Math.max(0.1, currentScale), 5);
+    
+    // Adjust the translation to zoom towards the mouse cursor
+    currentTranslateX = mouseX - mouseXInCanvas * currentScale;
+    currentTranslateY = mouseY - mouseYInCanvas * currentScale;
+    
+    updateCanvasTransform();
+    updateMinimapViewport();
+}
+
+function updateCanvasTransform() {
+    infiniteCanvas.style.transform = `translate(${currentTranslateX}px, ${currentTranslateY}px) scale(${currentScale})`;
+}
+
+function updateMinimapViewport() {
+    const viewportWidth = window.innerWidth / (canvasWidth * currentScale) * 100;
+    const viewportHeight = window.innerHeight / (canvasHeight * currentScale) * 100;
+    const viewportX = (-currentTranslateX / (canvasWidth * currentScale)) * 100;
+    const viewportY = (-currentTranslateY / (canvasHeight * currentScale)) * 100;
+    
+    viewportIndicator.style.width = `${viewportWidth}%`;
+    viewportIndicator.style.height = `${viewportHeight}%`;
+    viewportIndicator.style.left = `${viewportX}%`;
+    viewportIndicator.style.top = `${viewportY}%`;
+}
+
+function createMinimapRectangle(rectangle) {
+    const miniRect = document.createElement('div');
+    miniRect.className = 'mini-rectangle';
+    
+    // Calculate position and size relative to the infinite canvas
+    const left = parseFloat(rectangle.style.left) / canvasWidth * 100;
+    const top = parseFloat(rectangle.style.top) / canvasHeight * 100;
+    const width = parseFloat(rectangle.style.width) / canvasWidth * 100;
+    const height = parseFloat(rectangle.style.height) / canvasHeight * 100;
+    
+    miniRect.style.left = `${left}%`;
+    miniRect.style.top = `${top}%`;
+    miniRect.style.width = `${width}%`;
+    miniRect.style.height = `${height}%`;
+    
+    minimap.appendChild(miniRect);
+}
+
+// Initialize viewport indicator
+updateMinimapViewport();
+</script>
+</body>
+</html>
